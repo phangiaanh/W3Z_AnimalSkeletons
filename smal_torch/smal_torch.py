@@ -7,11 +7,13 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 import sys, os
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 import numpy as np
 import torch
 from torch.autograd import Variable
 import pickle as pkl 
+from collections import OrderedDict
 from smal_torch.batch_lbs import batch_rodrigues, batch_global_rigid_transformation
 from smal_torch.smal_basics import align_smal_template_to_symmetry_axis
 
@@ -19,23 +21,88 @@ from smal_torch.smal_basics import align_smal_template_to_symmetry_axis
 def undo_chumpy(x):
     return x if isinstance(x, np.ndarray) else x.r
 
+def explore_pickle(pickle_path):
+    """
+    Explore and print the contents of a pickle file.
+    Args:
+        pickle_path: Path to the pickle file
+    """
+    try:
+        with open(pickle_path, 'rb') as f:
+            data = pkl.load(f, encoding='latin1')
+            
+        def print_structure(obj, level=0, name="root"):
+            indent = "  " * level
+            if isinstance(obj, (dict, OrderedDict)):
+                print(f"{indent}{name}: dict with {len(obj)} keys")
+                for key, value in obj.items():
+                    print_structure(value, level + 1, str(key))
+            elif isinstance(obj, (list, tuple)):
+                print(f"{indent}{name}: {type(obj).__name__} with {len(obj)} items")
+                if len(obj) > 0:
+                    print_structure(obj[0], level + 1, "first_item")
+            elif isinstance(obj, np.ndarray):
+                print(f"{indent}{name}: numpy array with shape {obj.shape}, dtype {obj.dtype}")
+            else:
+                print(f"{indent}{name}: {type(obj).__name__}")
+        
+        print(f"\nExploring pickle file: {pickle_path}")
+        print("=" * 50)
+        print_structure(data)
+        
+    except Exception as e:
+        print(f"Error loading pickle file: {e}")
+
 class SMAL(object):
-    def __init__(self, model_path, device, use_smal_betas=False, dtype=torch.float):
+    def __init__(self, device, use_smal_betas=False, animal_type='equidae', dtype=torch.float):
+        from huggingface_hub import hf_hub_download
+        
         self.device = device 
         self.use_smal_betas = use_smal_betas
+
+        # Define model paths from HuggingFace repo
+        repo_id = "WatermelonHCMUT/AnimalSkeletons"
+        model_paths = {
+            'equidae': 'my_smpl_0000_horse_new_skeleton_horse.pkl',
+            'canidae': 'my_smpl_SMBLD_nbj_v3.pkl',
+            # 'bovidae': 'cow2.pkl',
+            # 'felidae': 'MaleLion800.pkl',
+            # 'hippopotamus': 'hippo5.pkl',
+            'default': 'smal_CVPR2017.pkl'
+        }
+        
+        if animal_type not in model_paths:
+            raise ValueError(f"Unsupported animal type: {animal_type}. Supported types: {list(model_paths.keys())}")
+            
+        # Download model to temp directory
+        model_path = hf_hub_download(
+            repo_id=repo_id, 
+            filename=model_paths[animal_type],
+            local_dir="temp"
+        )
+
         # -- Load SMPL params --
         with open(model_path, 'rb') as f:
             dd = pkl.load(f, encoding="latin1")
+        # explore_pickle(model_path)
 
         self.faces = torch.from_numpy(dd['f'].astype(np.int32)).type(torch.int32).to(self.device)
 
         v_template = dd['v_template']
-        v, self.left_inds, self.right_inds, self.center_inds, symIdx = align_smal_template_to_symmetry_axis(model_path, v_template)
-
-        # symIdx
-        self.symIdx = Variable(
-            torch.tensor(symIdx).long().to(self.device), 
-            requires_grad=False)
+        
+        # Only apply symmetry alignment for horse models
+        if animal_type == 'equidae' or animal_type == 'canidae':
+            v, self.left_inds, self.right_inds, self.center_inds, symIdx = align_smal_template_to_symmetry_axis(animal_type, v_template)
+            # symIdx
+            self.symIdx = Variable(
+                torch.tensor(symIdx).long().to(self.device), 
+                requires_grad=False)
+        else:
+            v = v_template
+            self.left_inds = None
+            self.right_inds = None
+            self.center_inds = None
+            self.symIdx = None
 
         # Mean template vertices
         self.v_template = Variable(
@@ -73,9 +140,9 @@ class SMAL(object):
             requires_grad=False)
 
     def __call__(self, beta, theta, trans=None, del_v=None, betas_logscale=None, get_skin=True):
-
+        
         if self.use_smal_betas: 
-            nBetas = beta.shape[1]
+            nBetas = beta.shape[0]
         else:
             nBetas = 9
 
@@ -172,7 +239,7 @@ def test_gpu(opts):
 
     np.random.seed(9608)
     print(os.path.abspath(__file__))
-    model = SMAL(model_path='../smpl_models/my_smpl_0000_horse_new_skeleton_horse.pkl', device=device, use_smal_betas=False)
+    model = SMAL(device=device, use_smal_betas=False)
     for i in range(10):
         pose = torch.from_numpy((np.random.rand(32, pose_size) - 0.5) * 0.4) \
             .type(torch.float32).to(device)

@@ -4,6 +4,8 @@ import numpy as np
 from collections import OrderedDict
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
+from huggingface_hub import hf_hub_download
+
 
 def explore_pickle(pickle_path):
     """
@@ -145,46 +147,76 @@ def visualize_3d_mesh(vertices, faces, title="3D Mesh"):
 
 if __name__ == "__main__":
     # Example usage
+    # pickle_paths = [
+    #     "hippopotamus",
+    #     "felidae",
+    #     "bovidae",
+    #     "equidae",
+    #     "canidae"
+    # ]
     pickle_paths = [
-        "SMAL_horse/data/my_smpl_0000_horse_new_skeleton_horse.pkl",
-        "SMAL_origin/data/smal_CVPR2017.pkl",
-        "SMAL_origin/data/smal_CVPR2017_data.pkl",
-        "SMAL_horse/data/walking_toy_symmetric_smal_0000_new_skeleton_pose_prior_new_36parts.pkl"
+        "default",
+        # "equidae",
+        # "canidae"
     ]
     
     for path in pickle_paths:
-        explore_pickle(path)
-        try:
-            # Initialize SMAL model
+        # explore_pickle(path)
+        # try:
             
-            with open(path, 'rb') as f:
-                data = pickle.load(f, encoding='latin1')
-                # Try to find vertices and faces in the data
-                if isinstance(data, dict):
-                    vertices = None
-                    faces = None
-                    
-                    # Check different possible keys for vertices
-                    if 'v_template' in data:
-                        vertices = data['v_template']
-                    elif 'vertices' in data:
-                        vertices = data['vertices']
-                    
-                    # Check different possible keys for faces
-                    if 'faces' in data:
-                        smal_model = SMAL(model_path=path, device='cpu')
-                        faces = smal_model.faces.unsqueeze(0)
-                        print(f"Faces {faces}")
-                        faces = data['faces']
+            # smal_model = SMAL(device='cpu', animal_type=path)
+            # faces = smal_model.faces
+            # vertices = smal_model.v_template
+            # visualize_3d_mesh(vertices, faces, f"Mesh from {path}")
+
+            # import trimesh
+            # mesh = trimesh.Trimesh(vertices, faces)
+            # mesh.export(f"mesh_{path}.obj")
+        smal_model = SMAL(device='cpu', animal_type="default", use_smal_betas=True)
+
+        print(smal_model.shapedirs.shape)
+
+        repo_id = "WatermelonHCMUT/AnimalSkeletons"
+        model_paths = {
+            'equidae': 'my_smpl_0000_horse_new_skeleton_horse.pkl',
+            'canidae': 'my_smpl_SMBLD_nbj_v3.pkl',
+            'bovidae': 'cow2.pkl',
+            'felidae': 'MaleLion800.pkl',
+            'hippopotamus': 'hippo5.pkl',
+        }
+               
+        # Download model to temp directory
+        model_path = hf_hub_download(
+            repo_id=repo_id, 
+            filename=model_paths['felidae'],
+            local_dir="temp"
+        )
+
+        with open(model_path, 'rb') as f:
+            dd = pickle.load(f, encoding="latin1")
+
+        # Extract variables
+        pose = dd['pose']
+        beta = dd['beta']
+        trans = dd['trans']
+
+        print(pose.shape)
+        print(beta.shape)
+        print(trans.shape)
+
+        print(beta)
+
+        # Extract variables
+        pose_val = pose.r if hasattr(pose, 'r') else pose
+        beta_val = beta.r if hasattr(beta, 'r') else beta
+        trans_val = trans.r if hasattr(trans, 'r') else trans
+
+        print(beta_val)
+
+        import torch
+        smal_model(beta=torch.from_numpy(beta_val).float(), theta=torch.from_numpy(pose_val).float(), trans=torch.from_numpy(trans_val).float())
+
+
                         
-                    elif 'f' in data:
-                        smal_model = SMAL(model_path=path, device='cpu')
-                        faces = smal_model.faces.unsqueeze(0)
-                        print(f"Faces {faces}")
-                        faces = data['f']
-                    
-                    if vertices is not None and faces is not None:
-                        visualize_3d_mesh(vertices, faces, f"Mesh from {path}")
-                        
-        except Exception as e:
-            print(f"Error visualizing mesh from {path}: {e}")
+        # except Exception as e:
+        #     print(f"Error visualizing mesh from {path}: {e}")
