@@ -37,6 +37,8 @@ def batch_rodrigues(theta, device=None):
     Theta is Nx3
     """
     batch_size = theta.shape[0]
+    print("Oh")
+    print(theta.shape)
 
     angle = (torch.norm(theta + 1e-8, p=2, dim=1)).unsqueeze(-1)
     r = (torch.div(theta, angle)).unsqueeze(-1)
@@ -90,13 +92,18 @@ def batch_global_rigid_transformation(Rs, Js, parent, rotate_base = False, betas
       new_J : `Tensor`: N x 36 x 3 location of absolute joints
       A     : `Tensor`: N x 36 4 x 4 relative joint transformations for LBS.
     """
+
+    
+    NUM_JOINTS = Js.shape[-2]
     if rotate_base:
         print('Flipping the SMPL coordinate frame!!!!')
         rot_x = torch.Tensor([[1, 0, 0], [0, -1, 0], [0, 0, -1]])
-        rot_x = torch.reshape(torch.repeat(rot_x, [N, 1]), [N, 3, 3]) # In tf it was tile
+        rot_x = torch.reshape(rot_x.repeat([Rs.shape[0], 1]), [Rs.shape[0], 3, 3]) # In tf it was tile
         root_rotation = torch.matmul(Rs[:, 0, :, :], rot_x)
     else:
         root_rotation = Rs[:, 0, :, :]
+
+    print(root_rotation.shape)
 
     # Now Js is N x 36 x 3 x 1
     Js = Js.unsqueeze(-1)
@@ -166,7 +173,7 @@ def batch_global_rigid_transformation(Rs, Js, parent, rotate_base = False, betas
     # how much the bone moved (not the final location of the bone)
     # but (final_bone - init_bone)
     # ---
-    Js_w0 = torch.cat([Js, torch.zeros([N, 36, 1, 1]).to(device)], 2) #.cuda(device=opts.gpu_id)
+    Js_w0 = torch.cat([Js, torch.zeros([N, NUM_JOINTS, 1, 1]).to(device)], 2) #.cuda(device=opts.gpu_id)
     init_bone = torch.matmul(results, Js_w0)
     # Append empty 4 x 3:
     init_bone = F.pad(init_bone, (3,0,0,0,0,0,0,0))

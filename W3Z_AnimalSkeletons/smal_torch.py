@@ -14,8 +14,8 @@ import torch
 from torch.autograd import Variable
 import pickle as pkl 
 from collections import OrderedDict
-from smal_torch.batch_lbs import batch_rodrigues, batch_global_rigid_transformation
-from smal_torch.smal_basics import align_smal_template_to_symmetry_axis
+from W3Z_AnimalSkeletons.batch_lbs import batch_rodrigues, batch_global_rigid_transformation
+from W3Z_AnimalSkeletons.smal_basics import align_smal_template_to_symmetry_axis
 
 # There are chumpy variables so convert them to numpy.
 def undo_chumpy(x):
@@ -65,9 +65,9 @@ class SMAL(object):
         model_paths = {
             'equidae': 'my_smpl_0000_horse_new_skeleton_horse.pkl',
             'canidae': 'my_smpl_SMBLD_nbj_v3.pkl',
-            # 'bovidae': 'cow2.pkl',
-            # 'felidae': 'MaleLion800.pkl',
-            # 'hippopotamus': 'hippo5.pkl',
+            'bovidae': 'smal_CVPR2017.pkl',
+            'felidae': 'smal_CVPR2017.pkl',
+            'hippopotamus': 'smal_CVPR2017.pkl',
             'default': 'smal_CVPR2017.pkl'
         }
         
@@ -142,9 +142,11 @@ class SMAL(object):
     def __call__(self, beta, theta, trans=None, del_v=None, betas_logscale=None, get_skin=True):
         
         if self.use_smal_betas: 
-            nBetas = beta.shape[0]
+            nBetas = beta.shape[1]
         else:
             nBetas = 9
+
+        NUM_JOINTS = self.J_regressor.shape[-1]
 
         # 1. Add shape blend shapes
 
@@ -167,33 +169,40 @@ class SMAL(object):
 
         # 3. Add pose blend shapes
         # N x 36 x 3 x 3
+        theta[0, :3] = torch.tensor([0, 0, 0], dtype=theta.dtype, device=theta.device)
         if len(theta.shape) ==4:
             Rs = theta
         else:
-            Rs = torch.reshape( batch_rodrigues(torch.reshape(theta, [-1, 3]), device=self.device), [-1, 36, 3, 3])
+            Rs = torch.reshape( batch_rodrigues(torch.reshape(theta, [-1, 3]), device=self.device), [-1, NUM_JOINTS, 3, 3])
         # Ignore global rotation.
-        pose_feature = torch.reshape(Rs[:, 1:, :, :] - torch.eye(3).to(self.device),  [-1, 315])
+        pose_feature = torch.reshape(Rs[:, 1:, :, :] - torch.eye(3).to(self.device),  [-1, (NUM_JOINTS - 1) * 9])
 
 
-
+        print(Rs.shape)
         v_posed = torch.reshape(
             torch.matmul(pose_feature, self.posedirs),
             [-1, self.size[0], self.size[1]]) + v_shaped
 
         #4. Get the global joint location
+        print(J.shape[-2])
         self.J_transformed, A = batch_global_rigid_transformation(Rs, J, self.parents, device=self.device, betas_logscale=betas_logscale)
 
-
+        print(A.shape)
         # 5. Do skinning:
         num_batch = theta.shape[0]
+        num_vertices = self.weights.shape[0]  # Should be 3889
+        
+        # Repeat weights for each batch
+        weights_t = self.weights.repeat([num_batch, 1])  # Shape: [num_batch, 3889, 33]
+        
+        # Reshape to [num_batch, num_vertices, NUM_JOINTS]
+        W = torch.reshape(weights_t, [num_batch, num_vertices, NUM_JOINTS])  # NUM_JOINTS = 33
 
-        weights_t = self.weights.repeat([num_batch, 1])
-        W = torch.reshape(weights_t, [num_batch, -1, 36])
-
-
+        # Now reshape A to [num_batch, NUM_JOINTS, 16]
         T = torch.reshape(
-            torch.matmul(W, torch.reshape(A, [num_batch, 36, 16])),
-                [num_batch, -1, 4, 4])
+            torch.matmul(W, torch.reshape(A, [num_batch, NUM_JOINTS, 16])),
+            [num_batch, num_vertices, 4, 4]
+        )
         v_posed_homo = torch.cat(
                 [v_posed, torch.ones([num_batch, v_posed.shape[1], 1]).to(device = self.device)], 2)
         v_homo = torch.matmul(T, v_posed_homo.unsqueeze(-1))
@@ -203,7 +212,8 @@ class SMAL(object):
         if trans is None:
             trans = torch.zeros((num_batch,3)).to(device = self.device) 
 
-        verts = verts + trans[:,None,:]
+        print(trans)
+        # verts = verts + trans[:,None,:]
 
         # Get joints:
         joint_x = torch.matmul(verts[:, :, 0], self.J_regressor)
